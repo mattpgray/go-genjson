@@ -26,6 +26,12 @@ func main() {
 		[]byte(`[ 1 , ]`),
 		[]byte(`[ , 1 ]`),
 		[]byte(`[ 1 `),
+		[]byte(`{ 1 }`),
+		[]byte(`{ 1: 1 }`),
+		[]byte(`{ "key": "value" }`),
+		[]byte(`{}`),
+		[]byte(`{ "key": "value", "key2": "value2"}`),
+		[]byte(`{ "key" : "value" , "key2" : { "key" : "value" } }`),
 	}
 	for _, tt := range tests {
 		v, err := genjson.Deserialize(tt)

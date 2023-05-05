@@ -57,25 +57,82 @@ func jsonParser() parser[Value] {
 			numberParser(),
 			jsonStringParser(),
 			arrayParser(),
+			objectParser(),
 		),
 	)
 }
 
-func arrayParser() parser[Value] {
-	return surroundParser[Value](
-		discardParser(byteParser('[')),
-	)(
-		mapParser(
-			listParser(
-				lazyParser(jsonParser),
-				discardParser(trimSpaceParser(byteParser(','))),
-				discardParser(trimSpaceParser(byteParser(']'))),
+func objectParser() parser[Value] {
+	type keyValue struct {
+		key   string
+		value Value
+	}
+
+	elemParser := mapParser(
+		chainParsers(
+			surroundParser[keyValue]()(
+				mapParser(
+					stringParser(),
+					func(s string) keyValue { return keyValue{key: s} },
+				),
+			)(
+				discardParser(trimSpaceParser(byteParser(':'))),
 			),
-			func(val []Value) Value {
-				return Array(val)
-			},
+			mapParser(
+				trimSpaceParser(lazyParser(jsonParser)),
+				func(value Value) keyValue {
+					return keyValue{value: value}
+				},
+			),
+		),
+		func(kvs []keyValue) keyValue {
+			return keyValue{
+				key:   kvs[0].key,
+				value: kvs[1].value,
+			}
+		},
+	)
+	return mapParser(
+		compositeParser(
+			discardParser(byteParser('{')),
+			discardParser(trimSpaceParser(byteParser('}'))),
+			discardParser(trimSpaceParser(byteParser(','))),
+			trimSpaceParser(elemParser),
+		),
+		func(kvs []keyValue) Value {
+			m := map[string]Value{}
+			for _, kv := range kvs {
+				m[kv.key] = kv.value
+			}
+			return Object(m)
+		},
+	)
+}
+
+func compositeParser[V any](start, end, sep parser[empty], elem parser[V]) parser[[]V] {
+	return surroundParser[[]V](
+		start,
+	)(
+		listParser(
+			elem,
+			sep,
+			end,
 		),
 	)()
+}
+
+func arrayParser() parser[Value] {
+	return mapParser(
+		compositeParser(
+			discardParser(byteParser('[')),
+			discardParser(trimSpaceParser(byteParser(']'))),
+			discardParser(trimSpaceParser(byteParser(','))),
+			lazyParser(jsonParser),
+		),
+		func(val []Value) Value {
+			return Array(val)
+		},
+	)
 }
 
 func lazyParser[V any](f func() parser[V]) parser[V] {
