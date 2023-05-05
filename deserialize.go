@@ -9,7 +9,7 @@ import (
 )
 
 func Deserialize(b []byte) (Value, error) {
-	v, _, ok := jsonParser()(b)
+	_, v, ok := jsonParser()(b)
 	if !ok.Valid() {
 		return nil, errors.New("could not deserialize json")
 	}
@@ -111,36 +111,36 @@ func arrayParser() parser[Value] {
 }
 
 func lazyParser[V any](f func() parser[V]) parser[V] {
-	return func(bb []byte) (V, []byte, *BoolResult) {
+	return func(bb []byte) ([]byte, V, *BoolResult) {
 		return f()(bb)
 	}
 }
 
 func listParser[V any](p parser[V], sep parser[empty], endParser parser[empty]) parser[[]V] {
-	return func(bb []byte) ([]V, []byte, *BoolResult) {
+	return func(bb []byte) ([]byte, []V, *BoolResult) {
 		var vs []V
-		_, bb2, ok := endParser(bb)
+		bb2, _, ok := endParser(bb)
 		if ok.Valid() {
-			return vs, bb2, ok
+			return bb2, vs, ok
 		}
-		v, bb2, ok := p(bb2)
+		bb2, v, ok := p(bb2)
 		if !ok.Valid() {
-			return nil, bb, OK(false)
+			return bb, nil, OK(false)
 		}
 		vs = append(vs, v)
 
 		for {
-			_, bb3, ok := endParser(bb2)
+			bb3, _, ok := endParser(bb2)
 			if ok.Valid() {
-				return vs, bb3, ok
+				return bb3, vs, ok
 			}
-			_, bb3, ok = sep(bb2)
+			bb3, _, ok = sep(bb2)
 			if !ok.Valid() {
-				return nil, bb, ok
+				return bb, nil, ok
 			}
-			v, bb3, ok := p(bb3)
+			bb3, v, ok := p(bb3)
 			if !ok.Valid() {
-				return nil, bb, ok
+				return bb, nil, ok
 			}
 
 			vs = append(vs, v)
@@ -150,7 +150,7 @@ func listParser[V any](p parser[V], sep parser[empty], endParser parser[empty]) 
 }
 
 func trimSpaceParser[V any](p parser[V]) parser[V] {
-	return func(bb []byte) (V, []byte, *BoolResult) {
+	return func(bb []byte) ([]byte, V, *BoolResult) {
 		for i := range bb {
 			if !unicode.IsSpace(rune(bb[i])) {
 				bb = bb[i:]
@@ -162,32 +162,32 @@ func trimSpaceParser[V any](p parser[V]) parser[V] {
 }
 
 func discardParser[V any](p parser[V]) parser[empty] {
-	return func(bb []byte) (empty, []byte, *BoolResult) {
-		_, bb, ok := p(bb)
-		return empty{}, bb, ok
+	return func(bb []byte) ([]byte, empty, *BoolResult) {
+		bb, _, ok := p(bb)
+		return bb, empty{}, ok
 	}
 }
 
 func surroundParser[V any](before ...parser[empty]) func(p parser[V]) func(after ...parser[empty]) parser[V] {
 	return func(p parser[V]) func(after ...parser[empty]) parser[V] {
 		return func(after ...parser[empty]) parser[V] {
-			return func(bb []byte) (V, []byte, *BoolResult) {
-				_, bb2, ok := chainParsers(before...)(bb)
+			return func(bb []byte) ([]byte, V, *BoolResult) {
+				bb2, _, ok := chainParsers(before...)(bb)
 				if !ok.Valid() {
 					var v2 V
-					return v2, bb, ok
+					return bb, v2, ok
 				}
-				v2, bb2, ok := p(bb2)
+				bb2, v2, ok := p(bb2)
 				if !ok.Valid() {
 					var v2 V
-					return v2, bb, ok
+					return bb, v2, ok
 				}
-				_, bb2, ok = chainParsers(after...)(bb2)
+				bb2, _, ok = chainParsers(after...)(bb2)
 				if !ok.Valid() {
 					var v2 V
-					return v2, bb, ok
+					return bb, v2, ok
 				}
-				return v2, bb2, OK(true)
+				return bb2, v2, OK(true)
 			}
 		}
 	}
@@ -217,10 +217,10 @@ func stringParser() parser[string] {
 					case '\\':
 						inEscape = true
 					case '"':
-						return bb[:i+1], bb[i+1:], OK(true)
+						return bb[i+1:], bb[:i+1], OK(true)
 					}
 				}
-				return nil, bb, OK(false)
+				return bb, nil, OK(false)
 			},
 		),
 		func(b []byte) (string, *BoolResult) {
@@ -235,10 +235,10 @@ func stringParser() parser[string] {
 
 func flattenParser[V any](parsers ...parser[[]V]) parser[[]V] {
 	p := chainParsers(parsers...)
-	return func(bb []byte) ([]V, []byte, *BoolResult) {
-		res, bb, ok := p(bb)
+	return func(bb []byte) ([]byte, []V, *BoolResult) {
+		bb, res, ok := p(bb)
 		if !ok.Valid() {
-			return nil, bb, ok
+			return bb, nil, ok
 		}
 		cap := 0
 		for _, r := range res {
@@ -248,7 +248,7 @@ func flattenParser[V any](parsers ...parser[[]V]) parser[[]V] {
 		for _, r := range res {
 			out = append(out, r...)
 		}
-		return out, bb, OK(true)
+		return bb, out, OK(true)
 	}
 }
 
@@ -265,16 +265,16 @@ func floatParser() parser[float64] {
 		chainParsers(byteParser('.')),
 		digitsParser(),
 	)
-	return func(bb []byte) (float64, []byte, *BoolResult) {
+	return func(bb []byte) ([]byte, float64, *BoolResult) {
 		floatBytes, bb2, ok := floatBytesParser(bb)
 		if !ok.Valid() {
-			return 0, bb, ok
+			return bb, 0, ok
 		}
 		f, err := strconv.ParseFloat(string(floatBytes), 64)
 		if err != nil {
-			return 0, bb, OK(false)
+			return bb, 0, OK(false)
 		}
-		return f, bb2, OK(true)
+		return bb2, f, OK(true)
 	}
 }
 
@@ -282,16 +282,16 @@ func intParser() parser[int64] {
 	digitsParser := predicateParser(func(b byte) bool {
 		return b >= '0' && b <= '9'
 	})
-	return func(bb []byte) (int64, []byte, *BoolResult) {
+	return func(bb []byte) ([]byte, int64, *BoolResult) {
 		intBytes, bb2, ok := digitsParser(bb)
 		if !ok.Valid() {
-			return 0, bb, ok
+			return bb, 0, ok
 		}
 		i, err := strconv.ParseInt(string(intBytes), 10, 64)
 		if err != nil {
-			return 0, bb, OK(false)
+			return bb, 0, OK(false)
 		}
-		return i, bb2, OK(true)
+		return bb2, i, OK(true)
 	}
 }
 
@@ -351,66 +351,66 @@ func boolParser() parser[Value] {
 }
 
 func tryParsers[V any](parsers ...parser[V]) parser[V] {
-	return func(bb []byte) (V, []byte, *BoolResult) {
+	return func(bb []byte) ([]byte, V, *BoolResult) {
 		for _, p := range parsers {
-			v, bb2, ok := p(bb)
+			bb2, v, ok := p(bb)
 			if ok.Valid() {
-				return v, bb2, ok
+				return bb2, v, ok
 			}
 		}
 		var v V
-		return v, bb, OK(false)
+		return bb, v, OK(false)
 	}
 }
 
 func chainParsers[V any](parsers ...parser[V]) parser[[]V] {
-	return func(bb []byte) ([]V, []byte, *BoolResult) {
+	return func(bb []byte) ([]byte, []V, *BoolResult) {
 		res := make([]V, 0, len(parsers))
 		bb2 := bb
 		for _, p := range parsers {
-			v, bb3, ok := p(bb2)
+			bb3, v, ok := p(bb2)
 			if !ok.Valid() {
-				return nil, bb, ok
+				return bb, nil, ok
 			}
 			res = append(res, v)
 			bb2 = bb3
 		}
-		return res, bb2, OK(true)
+		return bb2, res, OK(true)
 	}
 }
 
 func byteParser(b byte) parser[byte] {
-	return func(bb []byte) (byte, []byte, *BoolResult) {
+	return func(bb []byte) ([]byte, byte, *BoolResult) {
 		if len(bb) > 0 && bb[0] == b {
-			return b, bb[1:], OK(true)
+			return bb[1:], b, OK(true)
 		}
-		return 0, bb, OK(false)
+		return bb, 0, OK(false)
 	}
 }
 
 func mapParser[V1 any, V2 any](parser parser[V1], f func(V1) V2) parser[V2] {
-	return func(bb []byte) (V2, []byte, *BoolResult) {
-		v1, bb, ok := parser(bb)
+	return func(bb []byte) ([]byte, V2, *BoolResult) {
+		bb, v1, ok := parser(bb)
 		if !ok.Valid() {
 			var v2 V2
-			return v2, bb, ok
+			return bb, v2, ok
 		}
-		return f(v1), bb, ok
+		return bb, f(v1), ok
 	}
 }
 
 func parseParser[V1 any, V2 any](parser parser[V1], f func(V1) (V2, *BoolResult)) parser[V2] {
-	return func(bb []byte) (V2, []byte, *BoolResult) {
-		v1, bb2, ok := parser(bb)
+	return func(bb []byte) ([]byte, V2, *BoolResult) {
+		bb2, v1, ok := parser(bb)
 		if !ok.Valid() {
 			var v2 V2
-			return v2, bb, ok
+			return bb, v2, ok
 		}
 		v2, ok := f(v1)
 		if !ok.Valid() {
 			var v2 V2
-			return v2, bb, ok
+			return bb, v2, ok
 		}
-		return v2, bb2, ok
+		return bb2, v2, ok
 	}
 }

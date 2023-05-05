@@ -8,7 +8,21 @@ type Input interface{}
 type Output interface{}
 
 type Result interface {
+	*ErrResult | *BoolResult
 	Valid() bool
+}
+
+func valid[R Result]() R {
+	var r R
+	// unsafe casting to get around the type system.
+	var validAny any
+	switch any(r).(type) {
+	case *BoolResult:
+		validAny = OK(true)
+	case *ErrResult:
+		validAny = Err(nil)
+	}
+	return validAny.(R)
 }
 
 // Err is a helper for making valid or invalid ErrResults.
@@ -37,13 +51,4 @@ func (br *BoolResult) Valid() bool {
 
 // Parser is an abstract type that defines a function that is able to take some input, return some
 // output and the remaining input and any result.
-type Parser[I Input, O Output, R Result] func(a I) (O, I, R)
-
-// func FlattenParser[A any, V any]
-
-// LazyParser allows for the creation of the parser to be delayed to avoid infinite recursion.
-func LazyParser[P Parser[I, O, R], I Input, O Output, R Result](f func() Parser[I, O, R]) Parser[I, O, R] {
-	return func(bb I) (O, I, R) {
-		return f()(bb)
-	}
-}
+type Parser[I Input, O Output, R Result] func(a I) (I, O, R)
