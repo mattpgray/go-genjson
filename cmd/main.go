@@ -20,6 +20,12 @@ func main() {
 		[]byte(`"asdf"`),
 		[]byte(`"\""`),
 		[]byte(`   123  `),
+		[]byte(`[]`),
+		[]byte(`[ 1 ]`),
+		[]byte(`[ 1 , 3 ]`),
+		[]byte(`[ 1 , ]`),
+		[]byte(`[ , 1 ]`),
+		[]byte(`[ 1 `),
 	}
 	for _, tt := range tests {
 		v, err := genjson.Deserialize(tt)

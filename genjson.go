@@ -56,8 +56,65 @@ func jsonParser() parser[Value] {
 			boolParser(),
 			numberParser(),
 			jsonStringParser(),
+			arrayParser(),
 		),
 	)
+}
+
+func arrayParser() parser[Value] {
+	return surroundParser[Value](
+		discardParser(byteParser('[')),
+	)(
+		mapParser(
+			listParser(
+				lazyParser(jsonParser),
+				discardParser(trimSpaceParser(byteParser(','))),
+				discardParser(trimSpaceParser(byteParser(']'))),
+			),
+			func(val []Value) Value {
+				return Array(val)
+			},
+		),
+	)()
+}
+
+func lazyParser[V any](f func() parser[V]) parser[V] {
+	return func(bb []byte) (V, []byte, bool) {
+		return f()(bb)
+	}
+}
+
+func listParser[V any](p parser[V], sep parser[empty], endParser parser[empty]) parser[[]V] {
+	return func(bb []byte) ([]V, []byte, bool) {
+		var vs []V
+		_, bb2, ok := endParser(bb)
+		if ok {
+			return vs, bb2, ok
+		}
+		v, bb2, ok := p(bb2)
+		if !ok {
+			return nil, bb, false
+		}
+		vs = append(vs, v)
+
+		for {
+			_, bb3, ok := endParser(bb2)
+			if ok {
+				return vs, bb3, ok
+			}
+			_, bb3, ok = sep(bb2)
+			if !ok {
+				return nil, bb, false
+			}
+			v, bb3, ok := p(bb3)
+			if !ok {
+				return nil, bb, false
+			}
+
+			vs = append(vs, v)
+			bb2 = bb3
+		}
+	}
 }
 
 func trimSpaceParser[V any](p parser[V]) parser[V] {
