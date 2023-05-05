@@ -49,11 +49,11 @@ func (b Bool) GoString() string { return "genjson.Bool{" + strconv.FormatBool(bo
 
 func (n Number) GoString() string {
 	if n.IsFloat {
-		return fmt.Sprintf("genjson.Number{%v})", n.Float)
+		return fmt.Sprintf("genjson.Number{%v}", n.Float)
 	}
-	return fmt.Sprintf("genjson.Number{%v})", n.Integer)
+	return fmt.Sprintf("genjson.Number{%v}", n.Integer)
 }
 
 func (s String) GoString() string {
-	return fmt.Sprintf("genjson.String{%#v})", string(s))
+	return fmt.Sprintf("genjson.String{%#v}", string(s))
 }

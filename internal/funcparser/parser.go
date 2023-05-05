@@ -7,9 +7,20 @@ type Input interface{}
 
 type Output interface{}
 
-type Result interface {
-	*ErrResult | *BoolResult
+type result interface {
 	Valid() bool
+	Fatal() bool
+	toC() *CombineResult
+}
+
+type Result interface {
+	*ErrResult | *BoolResult | *CombineResult
+	result
+}
+
+type TryResult interface {
+	*BoolResult | *CombineResult
+	result
 }
 
 func valid[R Result]() R {
@@ -21,8 +32,27 @@ func valid[R Result]() R {
 		validAny = OK(true)
 	case *ErrResult:
 		validAny = Err(nil)
+	case *CombineResult:
+		validAny = COK(true)
+	default:
+		panic("unreachable")
 	}
 	return validAny.(R)
+}
+
+func ok[R TryResult](ok bool) R {
+	var r R
+	// unsafe casting to get around the type system.
+	var a any
+	switch any(r).(type) {
+	case *BoolResult:
+		a = OK(ok)
+	case *CombineResult:
+		a = COK(ok)
+	default:
+		panic("unreachable")
+	}
+	return a.(R)
 }
 
 // Err is a helper for making valid or invalid ErrResults.
@@ -38,7 +68,15 @@ func OK(ok bool) *BoolResult {
 type ErrResult struct{ Err error }
 
 func (er *ErrResult) Valid() bool {
-	return er == nil || er.Err == nil
+	return er.Err == nil
+}
+
+func (er *ErrResult) Fatal() bool {
+	return !er.Valid()
+}
+
+func (er *ErrResult) toC() *CombineResult {
+	return CErr(er.Err)
 }
 
 type BoolResult struct {
@@ -47,6 +85,50 @@ type BoolResult struct {
 
 func (br *BoolResult) Valid() bool {
 	return br == nil || br.OK
+}
+
+func (br *BoolResult) Fatal() bool {
+	return false
+}
+
+func (br *BoolResult) toC() *CombineResult {
+	return COK(br.OK)
+}
+
+// TODO: The  correct name for this type.
+// Combine an error and ok type for differentiating between when a parser is not valid and when
+// there is an actual error.
+type CombineResult struct {
+	OK  bool
+	Err error
+}
+
+func (cr *CombineResult) Valid() bool {
+	return cr.OK && cr.Err == nil
+}
+
+func (cr *CombineResult) Fatal() bool {
+	return cr.Err != nil
+}
+
+func (cr *CombineResult) toC() *CombineResult {
+	return cr
+}
+
+func (cr *CombineResult) ToE() *ErrResult {
+	return &ErrResult{Err: cr.Err}
+}
+
+func (cr *CombineResult) ToB() *BoolResult {
+	return &BoolResult{OK: cr.OK}
+}
+
+func CErr(err error) *CombineResult {
+	return &CombineResult{Err: err, OK: err == nil}
+}
+
+func COK(ok bool) *CombineResult {
+	return &CombineResult{Err: nil, OK: ok}
 }
 
 // Parser is an abstract type that defines a function that is able to take some input, return some
@@ -83,28 +165,28 @@ func ChainP[P ~func(I) (I, O, R), I Input, O Output, R Result](parsers ...P) fun
 	}
 }
 
-func Try[I Input, O Output, R Result](parsers ...func(I) (I, O, R)) func(I) (I, O, *BoolResult) {
+func Try[I Input, O Output, R TryResult](parsers ...func(I) (I, O, R)) func(I) (I, O, R) {
 	return TryP(parsers...)
 }
 
-func TryP[P ~func(I) (I, O, R), I Input, O Output, R Result](parsers ...P) func(I) (I, O, *BoolResult) {
-	return func(ii I) (I, O, *BoolResult) {
+func TryP[P ~func(I) (I, O, R), I Input, O Output, R TryResult](parsers ...P) func(I) (I, O, R) {
+	return func(ii I) (I, O, R) {
 		for _, p := range parsers {
-			ii2, v, ok := p(ii)
-			if ok.Valid() {
-				return ii2, v, OK(true)
+			ii2, v, r := p(ii)
+			if r.Fatal() {
+				var o O
+				return ii, o, r
+			}
+			if r.Valid() {
+				return ii2, v, r
 			}
 		}
 		var o O
-		return ii, o, OK(false)
+		return ii, o, ok[R](false)
 	}
 }
 
-func TryP2[P2 ~func(I) (I, O, *BoolResult), P ~func(I) (I, O, R), I Input, O Output, R Result](parsers ...P) P2 {
-	return TryP(parsers...)
-}
-
-func Map[I Input, O1 Output, O2 Output, R Result](parser func(I) (I, O1, R), f func(O1) O2) func(I) (I, O2, R) {
+func MapO[I Input, O1 Output, O2 Output, R Result](parser func(I) (I, O1, R), f func(O1) O2) func(I) (I, O2, R) {
 	return func(ii I) (I, O2, R) {
 		ii, o1, ok := parser(ii)
 		if !ok.Valid() {
@@ -115,32 +197,11 @@ func Map[I Input, O1 Output, O2 Output, R Result](parser func(I) (I, O1, R), f f
 	}
 }
 
-func MapResult[I Input, O Output, R1 Result, R2 Result](parser func(I) (I, O, R1), f func(R1) R2) func(I) (I, O, R2) {
+func MapR[I Input, O Output, R1 Result, R2 Result](parser func(I) (I, O, R1), f func(I, R1) R2) func(I) (I, O, R2) {
 	return func(ii I) (I, O, R2) {
-		ii, o, r := parser(ii)
-		return ii, o, f(r)
+		ii, o1, r := parser(ii)
+		return ii, o1, f(ii, r)
 	}
-}
-
-func Flatten[I Input, O Output, R Result](parsers ...func(I) (I, []O, R)) func(I) (I, []O, R) {
-	return FlattenP(parsers...)
-}
-
-func FlattenP[P ~func(I) (I, []O, R), I Input, O Output, R Result](parsers ...P) P {
-	return Map(
-		ChainP(parsers...),
-		func(oo [][]O) []O {
-			cap := 0
-			for _, o := range oo {
-				cap += len(o)
-			}
-			out := make([]O, 0, cap)
-			for _, o := range oo {
-				out = append(out, o...)
-			}
-			return out
-		},
-	)
 }
 
 func Validate[I Input, O1 Output, O2 Output, R Result](parser func(I) (I, O1, R), f func(O1) (O2, R)) func(I) (I, O2, R) {
@@ -157,4 +218,47 @@ func Validate[I Input, O1 Output, O2 Output, R Result](parser func(I) (I, O1, R)
 		}
 		return ii2, o2, ok
 	}
+}
+
+func ToC[I Input, O Output, R Result](parser func(I) (I, O, R)) func(I) (I, O, *CombineResult) {
+	return func(ii I) (I, O, *CombineResult) {
+		ii, o, r := parser(ii)
+		return ii, o, r.toC()
+	}
+}
+
+func Discard[I Input, O Output, R Result](p func(I) (I, O, R)) func(I) (I, Empty, R) {
+	return func(ii I) (I, Empty, R) {
+		ii, _, ok := p(ii)
+		return ii, Empty{}, ok
+	}
+}
+
+func DiscardP[P2 ~func(I) (I, Empty, R), P ~func(I) (I, O, R), I Input, O Output, R Result](p P) P2 {
+	return Discard(p)
+}
+
+func Left[P2 ~func(I) (I, Empty, R), P ~func(I) (I, O, R), I Input, O Output, R Result](p P) P2 {
+	return Discard(p)
+}
+
+func Flatten[I Input, O Output, R Result](parsers ...func(I) (I, []O, R)) func(I) (I, []O, R) {
+	return FlattenP(parsers...)
+}
+
+func FlattenP[P ~func(I) (I, []O, R), I Input, O Output, R Result](parsers ...P) P {
+	return MapO(
+		ChainP(parsers...),
+		func(oo [][]O) []O {
+			cap := 0
+			for _, o := range oo {
+				cap += len(o)
+			}
+			out := make([]O, 0, cap)
+			for _, o := range oo {
+				out = append(out, o...)
+			}
+			return out
+		},
+	)
 }
