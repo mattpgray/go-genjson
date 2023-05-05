@@ -51,7 +51,7 @@ func objectParser() parser[Value] {
 				discardParser(trimSpaceParser(byteParser(':'))),
 			),
 			mapParser(
-				trimSpaceParser(lazyParser(jsonParser)),
+				trimSpaceParser(Lazy(jsonParser)),
 				func(value Value) keyValue {
 					return keyValue{value: value}
 				},
@@ -102,18 +102,12 @@ func arrayParser() parser[Value] {
 			discardParser(byteParser('[')),
 			discardParser(trimSpaceParser(byteParser(']'))),
 			discardParser(trimSpaceParser(byteParser(','))),
-			lazyParser(jsonParser),
+			Lazy(jsonParser),
 		),
 		func(val []Value) Value {
 			return Array(val)
 		},
 	)
-}
-
-func lazyParser[V any](f func() parser[V]) parser[V] {
-	return func(bb []byte) ([]byte, V, *BoolResult) {
-		return f()(bb)
-	}
 }
 
 func listParser[V any](p parser[V], sep parser[empty], endParser parser[empty]) parser[[]V] {

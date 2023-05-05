@@ -51,4 +51,10 @@ func (br *BoolResult) Valid() bool {
 
 // Parser is an abstract type that defines a function that is able to take some input, return some
 // output and the remaining input and any result.
-type Parser[I Input, O Output, R Result] func(a I) (I, O, R)
+type Parser[I Input, O Output, R Result] func(I) (I, O, R)
+
+func Lazy[P ~func(I) (I, O, R), I Input, O Output, R Result](f func() P) P {
+	return func(i I) (I, O, R) {
+		return f()(i)
+	}
+}
