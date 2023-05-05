@@ -7,7 +7,9 @@ package genjson
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"unicode"
 )
 
@@ -16,7 +18,7 @@ type (
 	// as a set type from other languages.
 	Value interface {
 		isValue()
-		append([]byte) []byte
+		append(*Serializer, int, []byte) []byte
 	}
 
 	Null   struct{}
@@ -37,6 +39,15 @@ func (Number) isValue() {}
 func (String) isValue() {}
 func (Array) isValue()  {}
 func (Object) isValue() {}
+
+var (
+	_ Value = Null{}
+	_ Value = Bool(false)
+	_ Value = Number{}
+	_ Value = String("")
+	_ Value = Array(nil)
+	_ Value = Object(nil)
+)
 
 func (b Bool) GoString() string { return "genjson.Bool{" + strconv.FormatBool(bool(b)) + "}" }
 
@@ -60,54 +71,94 @@ func Deserialize(b []byte) (Value, error) {
 	return v, nil
 }
 
-func (Null) append(bb []byte) []byte {
+func (Null) append(s *Serializer, level int, bb []byte) []byte {
 	return append(bb, "null"...)
 }
-func (b Bool) append(bb []byte) []byte {
+func (b Bool) append(s *Serializer, level int, bb []byte) []byte {
 	return append(bb, strconv.FormatBool(bool(b))...)
 }
-func (n Number) append(bb []byte) []byte {
+func (n Number) append(s *Serializer, level int, bb []byte) []byte {
 	if n.IsFloat {
 		return append(bb, strconv.FormatFloat(n.Float, 'f', 0, 64)...)
 	}
 	return append(bb, strconv.FormatInt(n.Integer, 10)...)
 }
-func (s String) append(bb []byte) []byte {
+func (s String) append(_ *Serializer, level int, bb []byte) []byte {
 	return appendString(bb, string(s))
 }
 func appendString(bb []byte, s string) []byte {
 	return append(bb, strconv.Quote(s)...)
 }
-func (a Array) append(bb []byte) []byte {
+func (a Array) append(s *Serializer, level int, bb []byte) []byte {
 	bb = append(bb, "["...)
 	for i, v := range a {
 		if i > 0 {
 			bb = append(bb, ","...)
 		}
-		bb = v.append(bb)
+		bb = appendIndent(s, level+1, bb)
+		bb = v.append(s, level+1, bb)
 	}
+	bb = appendIndent(s, level, bb)
 	return append(bb, "]"...)
 }
-func (o Object) append(bb []byte) []byte {
+func (o Object) append(s *Serializer, level int, bb []byte) []byte {
 	bb = append(bb, "{"...)
 	i := 0
-	for k, v := range o {
+	keys := make([]string, 0, len(o))
+	for k := range o {
+		keys = append(keys, k)
+	}
+	if s.SortKeys {
+		sort.Strings(keys)
+	}
+	for _, k := range keys {
+		v := o[k]
 		if i > 0 {
 			bb = append(bb, ","...)
 		}
+
 		i++
+		bb = appendIndent(s, level+1, bb)
 		bb = appendString(bb, k)
 		bb = append(bb, ":"...)
-		bb = v.append(bb)
+		if s.KeyValueGap {
+			bb = append(bb, " "...)
+		}
+		bb = v.append(s, level+1, bb)
 	}
+
+	bb = appendIndent(s, level, bb)
 	return append(bb, "}"...)
 }
 
-func Serialize(v Value) []byte {
+func appendIndent(s *Serializer, level int, bb []byte) []byte {
+	if s.Indent != 0 {
+		bb = append(bb, "\n"...)
+		bb = append(bb, strings.Repeat(" ", s.Prefix)...)
+		bb = append(bb, strings.Repeat(" ", s.Indent*level)...)
+	}
+	return bb
+}
+
+type Serializer struct {
+	Indent      int
+	Prefix      int
+	KeyValueGap bool
+	SortKeys    bool
+}
+
+var defSerializer Serializer
+
+func (s *Serializer) Serialize(v Value) []byte {
 	buf := make([]byte, 1024)
-	buf = v.append(buf)
+	buf = append(buf, strings.Repeat(" ", s.Prefix)...)
+	buf = v.append(s, 0, buf)
 	buf = buf[:len(buf):len(buf)]
 	return buf
+}
+
+func Serialize(v Value) []byte {
+	return defSerializer.Serialize(v)
 }
 
 type empty struct{}

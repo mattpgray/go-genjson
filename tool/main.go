@@ -17,7 +17,12 @@ func main() {
 	if err != nil {
 		fmt.Printf("ERROR: %v", err)
 	}
-	data2 := genjson.Serialize(js)
+	s := genjson.Serializer{
+		Indent:      4,
+		KeyValueGap: true,
+		SortKeys:    true,
+	}
+	data2 := s.Serialize(js)
 	if err != nil {
 		fmt.Printf("ERROR: %v", err)
 	}
