@@ -6,6 +6,7 @@ package genjson
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"unicode"
 )
@@ -15,6 +16,7 @@ type (
 	// as a set type from other languages.
 	Value interface {
 		isValue()
+		append([]byte) []byte
 	}
 
 	Null   struct{}
@@ -36,6 +38,19 @@ func (String) isValue() {}
 func (Array) isValue()  {}
 func (Object) isValue() {}
 
+func (b Bool) GoString() string { return "genjson.Bool{" + strconv.FormatBool(bool(b)) + "}" }
+
+func (n Number) GoString() string {
+	if n.IsFloat {
+		return fmt.Sprintf("genjson.Number{%v})", n.Float)
+	}
+	return fmt.Sprintf("genjson.Number{%v})", n.Integer)
+}
+
+func (s String) GoString() string {
+	return fmt.Sprintf("genjson.String{%#v})", string(s))
+}
+
 func Deserialize(b []byte) (Value, error) {
 	v, _, ok := jsonParser()(b)
 	if !ok {
@@ -43,6 +58,56 @@ func Deserialize(b []byte) (Value, error) {
 	}
 
 	return v, nil
+}
+
+func (Null) append(bb []byte) []byte {
+	return append(bb, "null"...)
+}
+func (b Bool) append(bb []byte) []byte {
+	return append(bb, strconv.FormatBool(bool(b))...)
+}
+func (n Number) append(bb []byte) []byte {
+	if n.IsFloat {
+		return append(bb, strconv.FormatFloat(n.Float, 'f', 0, 64)...)
+	}
+	return append(bb, strconv.FormatInt(n.Integer, 10)...)
+}
+func (s String) append(bb []byte) []byte {
+	return appendString(bb, string(s))
+}
+func appendString(bb []byte, s string) []byte {
+	return append(bb, strconv.Quote(s)...)
+}
+func (a Array) append(bb []byte) []byte {
+	bb = append(bb, "["...)
+	for i, v := range a {
+		if i > 0 {
+			bb = append(bb, ","...)
+		}
+		bb = v.append(bb)
+	}
+	return append(bb, "]"...)
+}
+func (o Object) append(bb []byte) []byte {
+	bb = append(bb, "{"...)
+	i := 0
+	for k, v := range o {
+		if i > 0 {
+			bb = append(bb, ","...)
+		}
+		i++
+		bb = appendString(bb, k)
+		bb = append(bb, ":"...)
+		bb = v.append(bb)
+	}
+	return append(bb, "}"...)
+}
+
+func Serialize(v Value) []byte {
+	buf := make([]byte, 1024)
+	buf = v.append(buf)
+	buf = buf[:len(buf):len(buf)]
+	return buf
 }
 
 type empty struct{}
@@ -92,19 +157,22 @@ func objectParser() parser[Value] {
 			}
 		},
 	)
-	return mapParser(
+	return parseParser(
 		compositeParser(
 			discardParser(byteParser('{')),
 			discardParser(trimSpaceParser(byteParser('}'))),
 			discardParser(trimSpaceParser(byteParser(','))),
 			trimSpaceParser(elemParser),
 		),
-		func(kvs []keyValue) Value {
+		func(kvs []keyValue) (Value, bool) {
 			m := map[string]Value{}
 			for _, kv := range kvs {
+				if _, ok := m[kv.key]; ok {
+					return nil, false
+				}
 				m[kv.key] = kv.value
 			}
-			return Object(m)
+			return Object(m), true
 		},
 	)
 }
