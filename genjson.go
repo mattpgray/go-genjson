@@ -74,21 +74,26 @@ func Deserialize(b []byte) (Value, error) {
 func (Null) append(s *Serializer, level int, bb []byte) []byte {
 	return append(bb, "null"...)
 }
+
 func (b Bool) append(s *Serializer, level int, bb []byte) []byte {
 	return append(bb, strconv.FormatBool(bool(b))...)
 }
+
 func (n Number) append(s *Serializer, level int, bb []byte) []byte {
 	if n.IsFloat {
 		return append(bb, strconv.FormatFloat(n.Float, 'f', 0, 64)...)
 	}
 	return append(bb, strconv.FormatInt(n.Integer, 10)...)
 }
+
 func (s String) append(_ *Serializer, level int, bb []byte) []byte {
 	return appendString(bb, string(s))
 }
+
 func appendString(bb []byte, s string) []byte {
 	return append(bb, strconv.Quote(s)...)
 }
+
 func (a Array) append(s *Serializer, level int, bb []byte) []byte {
 	bb = append(bb, "["...)
 	for i, v := range a {
@@ -101,6 +106,7 @@ func (a Array) append(s *Serializer, level int, bb []byte) []byte {
 	bb = appendIndent(s, level, bb)
 	return append(bb, "]"...)
 }
+
 func (o Object) append(s *Serializer, level int, bb []byte) []byte {
 	bb = append(bb, "{"...)
 	i := 0
