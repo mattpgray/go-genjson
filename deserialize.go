@@ -24,6 +24,10 @@ func (ie InvalidTokenError) Error() string {
 	return "invalid token '" + string(ie.Token) + "'"
 }
 
+type JSON struct {
+	value Value
+}
+
 func Deserialize(b []byte) (Value, error) {
 	d := deserializer{
 		b:   b,
@@ -36,7 +40,7 @@ func Deserialize(b []byte) (Value, error) {
 		return nil, er.Err
 	}
 
-	return v, nil
+	return v.value, nil
 }
 
 type deserializer struct {
@@ -67,6 +71,27 @@ func read(d deserializer) (deserializer, byte, *BoolResult) {
 	return d, 0, OK(false)
 }
 
+type loc struct {
+	row int
+	col int
+}
+
+type nodeKeyValue struct {
+	key      string
+	keyStart loc
+	keyEnd   loc
+	node
+}
+
+// nodes contains location and order information about the json. It does not contain the value
+// itself and must be kept consistent in a separate structure.
+type node struct {
+	objectNodes []nodeKeyValue
+	arrayNodes  []node
+	start       loc
+	end         loc
+}
+
 type (
 	parser[I Input, R Result] Parser[deserializer, I, R]
 
@@ -75,20 +100,49 @@ type (
 	parserC[I Input] parser[I, *CombineResult]
 )
 
-func jsonParserC() parser[Value, *CombineResult] {
+type output struct {
+	value Value
+	node  node
+}
+
+type locV[V any] struct {
+	start loc
+	end   loc
+	v     V
+}
+
+func locParser[O Output, R Result](p parser[O, R]) parser[locV[O], R] {
+	return func(d deserializer) (deserializer, locV[O], R) {
+		start := loc{row: d.row, col: d.col}
+		d, o, r := p(d)
+		end := loc{row: d.row, col: d.col}
+		return d, locV[O]{v: o, start: start, end: end}, r
+	}
+}
+
+func outputParser(p parser[Value, *CombineResult]) parserC[output] {
+	return MapO(
+		locParser(p),
+		func(loc locV[Value]) output {
+			return output{value: loc.v, node: node{start: loc.start, end: loc.end}}
+		},
+	)
+}
+
+func jsonParserC() parser[output, *CombineResult] {
 	return trimSpaceParser(
 		Try(
 			nullParser(),
 			boolParser(),
 			numberParser(),
-			jsonStringParser(),
+			stringParser(),
 			arrayParser(),
 			objectParser(),
 		),
 	)
 }
 
-func jsonParserE() parser[Value, *ErrResult] {
+func jsonParserE() parser[output, *ErrResult] {
 	return trimSpaceParser(
 		MapR(
 			jsonParserC(),
@@ -105,18 +159,112 @@ func jsonParserE() parser[Value, *ErrResult] {
 	)
 }
 
-func objectParser() parserC[Value] {
+func nullParser() parserC[output] {
+	return outputParser(
+		ToC(
+			MapO(
+				Chain(
+					byteParser('n'),
+					byteParser('u'),
+					byteParser('l'),
+					byteParser('l'),
+				),
+				func([]byte) Value {
+					return Null{}
+				},
+			),
+		),
+	)
+}
+
+func boolParser() parserC[output] {
+	return outputParser(
+		ToC(
+			MapO(
+				Try(
+					Chain(
+						byteParser('t'),
+						byteParser('r'),
+						byteParser('u'),
+						byteParser('e'),
+					),
+					Chain(
+						byteParser('f'),
+						byteParser('a'),
+						byteParser('l'),
+						byteParser('s'),
+						byteParser('e'),
+					),
+				),
+				func(v []byte) Value {
+					return Bool(string(v) == "true")
+				},
+			),
+		),
+	)
+}
+
+func numberParser() parserC[output] {
+	return outputParser(
+		Try(
+			MapO(floatParser(), func(i float64) Value { return Number{Float: i, IsFloat: true} }),
+			MapO(intParser(), func(i int64) Value { return Number{Integer: i} }),
+		),
+	)
+}
+
+func stringParser() parserC[output] {
+	return outputParser(
+		MapO(
+			rawStringParser(),
+			func(s string) Value {
+				return String(s)
+			},
+		),
+	)
+}
+
+func arrayParser() parser[output, *CombineResult] {
+	return MapO(
+		locParser(
+			compositeParser(
+				Discard(byteParser('[')),
+				Discard(trimSpaceParser(byteParser(']'))),
+				Discard(trimSpaceParser(byteParser(','))),
+				LazyP(jsonParserC),
+			),
+		),
+		func(val locV[[]output]) output {
+			var vals []Value
+			var nodes []node
+			for _, o := range val.v {
+				vals = append(vals, o.value)
+				nodes = append(nodes, o.node)
+			}
+			return output{
+				value: Array(vals),
+				node: node{
+					arrayNodes: nodes,
+					start:      val.start,
+					end:        val.end,
+				},
+			}
+		},
+	)
+}
+
+func objectParser() parserC[output] {
 	type keyValue struct {
-		key   string
-		value Value
+		key   locV[string]
+		value output
 	}
 
 	elemParser := MapO(
 		Chain(
 			surroundParser[keyValue]()(
 				MapO(
-					stringParser(),
-					func(s string) keyValue { return keyValue{key: s} },
+					locParser(rawStringParser()),
+					func(s locV[string]) keyValue { return keyValue{key: s} },
 				),
 			)(
 				Discard(
@@ -127,8 +275,8 @@ func objectParser() parserC[Value] {
 			),
 			MapO(
 				ToC(LazyP(jsonParserE)),
-				func(value Value) keyValue {
-					return keyValue{value: value}
+				func(o output) keyValue {
+					return keyValue{value: o}
 				},
 			),
 		),
@@ -140,21 +288,36 @@ func objectParser() parserC[Value] {
 		},
 	)
 	return Validate(
-		compositeParser(
-			Discard(byteParser('{')),
-			Discard(trimSpaceParser(byteParser('}'))),
-			Discard(trimSpaceParser(byteParser(','))),
-			trimSpaceParser(elemParser),
+		locParser(
+			compositeParser(
+				Discard(byteParser('{')),
+				Discard(trimSpaceParser(byteParser('}'))),
+				Discard(trimSpaceParser(byteParser(','))),
+				trimSpaceParser(elemParser),
+			),
 		),
-		func(kvs []keyValue) (Value, *CombineResult) {
+		func(kvs locV[[]keyValue]) (output, *CombineResult) {
 			m := map[string]Value{}
-			for _, kv := range kvs {
-				if _, ok := m[kv.key]; ok {
-					return nil, CErr(ErrDuplicateKey)
+			nodes := []nodeKeyValue{}
+			for _, kv := range kvs.v {
+				if _, ok := m[kv.key.v]; ok {
+					return output{}, CErr(ErrDuplicateKey)
 				}
-				m[kv.key] = kv.value
+				nodes = append(nodes, nodeKeyValue{
+					node:     kv.value.node,
+					keyStart: kv.key.start,
+					keyEnd:   kv.key.end,
+				})
+				m[kv.key.v] = kv.value.value
 			}
-			return Object(m), COK(true)
+			return output{
+				value: Object(m),
+				node: node{
+					start:       kvs.start,
+					end:         kvs.end,
+					objectNodes: nodes,
+				},
+			}, COK(true)
 		},
 	)
 }
@@ -169,20 +332,6 @@ func compositeParser[V any](start, end, sep parser[Empty, *BoolResult], elem par
 			end,
 		),
 	)()
-}
-
-func arrayParser() parser[Value, *CombineResult] {
-	return MapO(
-		compositeParser(
-			Discard(byteParser('[')),
-			Discard(trimSpaceParser(byteParser(']'))),
-			Discard(trimSpaceParser(byteParser(','))),
-			LazyP(jsonParserC),
-		),
-		func(val []Value) Value {
-			return Array(val)
-		},
-	)
 }
 
 func listParser[V any](p parser[V, *CombineResult], sep, endParser parser[Empty, *BoolResult]) parser[[]V, *CombineResult] {
@@ -264,16 +413,7 @@ func surroundParser[V any](before ...parser[Empty, *BoolResult]) func(p parser[V
 	}
 }
 
-func jsonStringParser() parserC[Value] {
-	return MapO(
-		stringParser(),
-		func(s string) Value {
-			return String(s)
-		},
-	)
-}
-
-func stringParser() parser[string, *CombineResult] {
+func rawStringParser() parser[string, *CombineResult] {
 	return Validate(
 		Flatten(
 			ToC(Chain(byteParser('"'))),
@@ -310,13 +450,6 @@ func stringParser() parser[string, *CombineResult] {
 			}
 			return s, COK(true)
 		},
-	)
-}
-
-func numberParser() parserC[Value] {
-	return Try(
-		MapO(floatParser(), func(i float64) Value { return Number{Float: i, IsFloat: true} }),
-		MapO(intParser(), func(i int64) Value { return Number{Integer: i} }),
 	)
 }
 
@@ -371,47 +504,6 @@ func predicateParser(predicate func(b byte) bool) parserB[[]byte] {
 			}
 		}
 	}
-}
-
-func nullParser() parserC[Value] {
-	return ToC(
-		MapO(
-			Chain(
-				byteParser('n'),
-				byteParser('u'),
-				byteParser('l'),
-				byteParser('l'),
-			),
-			func([]byte) Value {
-				return Null{}
-			},
-		),
-	)
-}
-
-func boolParser() parserC[Value] {
-	return ToC(
-		MapO(
-			Try(
-				Chain(
-					byteParser('t'),
-					byteParser('r'),
-					byteParser('u'),
-					byteParser('e'),
-				),
-				Chain(
-					byteParser('f'),
-					byteParser('a'),
-					byteParser('l'),
-					byteParser('s'),
-					byteParser('e'),
-				),
-			),
-			func(v []byte) Value {
-				return Bool(string(v) == "true")
-			},
-		),
-	)
 }
 
 func byteParser(b byte) parser[byte, *BoolResult] {
