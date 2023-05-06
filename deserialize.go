@@ -16,6 +16,8 @@ var (
 
 type InvalidTokenError struct {
 	Token byte
+	Row   int
+	Col   int
 }
 
 func (ie InvalidTokenError) Error() string {
@@ -23,7 +25,13 @@ func (ie InvalidTokenError) Error() string {
 }
 
 func Deserialize(b []byte) (Value, error) {
-	_, v, er := jsonParserE()(b)
+	d := deserializer{
+		b:   b,
+		idx: 0,
+		row: 1,
+		col: 1,
+	}
+	_, v, er := jsonParserE()(d)
 	if er.Err != nil {
 		return nil, er.Err
 	}
@@ -31,8 +39,36 @@ func Deserialize(b []byte) (Value, error) {
 	return v, nil
 }
 
+type deserializer struct {
+	b   []byte
+	idx int
+	row int
+	col int
+}
+
+func read(d deserializer) (deserializer, byte, *BoolResult) {
+	if d.idx < len(d.b) {
+		b := d.b[d.idx]
+		row := d.row
+		col := d.col
+		if b == '\n' {
+			row++
+			col = 1
+		} else {
+			col++
+		}
+		return deserializer{
+			b:   d.b,
+			idx: d.idx + 1,
+			row: row,
+			col: col,
+		}, b, OK(true)
+	}
+	return d, 0, OK(false)
+}
+
 type (
-	parser[I Input, R Result] Parser[[]byte, I, R]
+	parser[I Input, R Result] Parser[deserializer, I, R]
 
 	parserB[I Input] parser[I, *BoolResult]
 	parserE[I Input] parser[I, *ErrResult]
@@ -56,14 +92,14 @@ func jsonParserE() parser[Value, *ErrResult] {
 	return trimSpaceParser(
 		MapR(
 			jsonParserC(),
-			func(bb []byte, r *CombineResult) *ErrResult {
+			func(d deserializer, r *CombineResult) *ErrResult {
 				if r.Valid() {
 					return Err(nil)
 				}
 				if r.Err != nil {
 					return r.ToE()
 				}
-				return Err(errNoMatch(bb))
+				return Err(errNoMatch(d))
 			},
 		),
 	)
@@ -150,15 +186,15 @@ func arrayParser() parser[Value, *CombineResult] {
 }
 
 func listParser[V any](p parser[V, *CombineResult], sep, endParser parser[Empty, *BoolResult]) parser[[]V, *CombineResult] {
-	return func(bb []byte) ([]byte, []V, *CombineResult) {
+	return func(d deserializer) (deserializer, []V, *CombineResult) {
 		var vs []V
-		bb2, _, br := endParser(bb)
+		bb2, _, br := endParser(d)
 		if br.Valid() {
 			return bb2, vs, COK(true)
 		}
 		bb2, v, cr := p(bb2)
 		if !cr.Valid() {
-			return bb, nil, cr
+			return d, nil, cr
 		}
 		vs = append(vs, v)
 
@@ -169,16 +205,16 @@ func listParser[V any](p parser[V, *CombineResult], sep, endParser parser[Empty,
 			}
 			bb3, _, br = sep(bb2)
 			if !br.Valid() {
-				return bb, nil, CErr(errNoMatch(bb3))
+				return d, nil, CErr(errNoMatch(bb3))
 			}
 			// An invalid match here is
 			bb3, v, cr := p(bb3)
 			if cr.Err != nil {
-				return bb, nil, cr
+				return d, nil, cr
 			}
 			// An invalid match here is still an error
 			if !cr.OK {
-				return bb, nil, CErr(errNoMatch(bb3))
+				return d, nil, CErr(errNoMatch(bb3))
 			}
 
 			vs = append(vs, v)
@@ -188,35 +224,39 @@ func listParser[V any](p parser[V, *CombineResult], sep, endParser parser[Empty,
 }
 
 func trimSpaceParser[V any, R Result](p parser[V, R]) parser[V, R] {
-	return func(bb []byte) ([]byte, V, R) {
-		for i := range bb {
-			if !unicode.IsSpace(rune(bb[i])) {
-				bb = bb[i:]
+	return func(d deserializer) (deserializer, V, R) {
+		for {
+			d2, b, br := read(d)
+			if !br.OK {
 				break
 			}
+			if !unicode.IsSpace(rune(b)) {
+				break
+			}
+			d = d2
 		}
-		return p(bb)
+		return p(d)
 	}
 }
 
 func surroundParser[V any](before ...parser[Empty, *BoolResult]) func(p parser[V, *CombineResult]) func(after ...parser[Empty, *CombineResult]) parser[V, *CombineResult] {
 	return func(p parser[V, *CombineResult]) func(after ...parser[Empty, *CombineResult]) parser[V, *CombineResult] {
 		return func(after ...parser[Empty, *CombineResult]) parser[V, *CombineResult] {
-			return func(bb []byte) ([]byte, V, *CombineResult) {
-				bb2, _, ok := ChainP(before...)(bb)
+			return func(d deserializer) (deserializer, V, *CombineResult) {
+				bb2, _, ok := ChainP(before...)(d)
 				if !ok.Valid() {
 					var v2 V
-					return bb, v2, COK(ok.OK)
+					return d, v2, COK(ok.OK)
 				}
 				bb2, v2, cr := p(bb2)
 				if !cr.Valid() {
 					var v2 V
-					return bb, v2, cr
+					return d, v2, cr
 				}
 				bb2, _, cr = ChainP(after...)(bb2)
 				if !cr.Valid() {
 					var v2 V
-					return bb, v2, cr
+					return d, v2, cr
 				}
 				return bb2, v2, COK(true)
 			}
@@ -237,21 +277,30 @@ func stringParser() parser[string, *CombineResult] {
 	return Validate(
 		Flatten(
 			ToC(Chain(byteParser('"'))),
-			func(bb []byte) ([]byte, []byte, *CombineResult) {
+			func(d deserializer) (deserializer, []byte, *CombineResult) {
+				var buf []byte
 				inEscape := false
-				for i := range bb {
+				for {
+					var (
+						b  byte
+						br *BoolResult
+					)
+					d, b, br = read(d)
+					if !br.OK {
+						return d, nil, CErr(ErrUnmatchedQuote)
+					}
+					buf = append(buf, b)
 					if inEscape {
 						inEscape = false
 						continue
 					}
-					switch bb[i] {
+					switch b {
 					case '\\':
 						inEscape = true
 					case '"':
-						return bb[i+1:], bb[:i+1], COK(true)
+						return d, buf, COK(true)
 					}
 				}
-				return bb, nil, CErr(ErrUnmatchedQuote)
 			},
 		),
 		func(b []byte) (string, *CombineResult) {
@@ -310,17 +359,17 @@ func digitsParser() parserB[[]byte] {
 }
 
 func predicateParser(predicate func(b byte) bool) parserB[[]byte] {
-	return func(bb []byte) ([]byte, []byte, *BoolResult) {
-		for i := range bb {
-			if !predicate(bb[i]) {
-				ret := bb[:i]
-				if len(ret) > 0 {
-					return bb[i:], ret, OK(len(ret) > 0)
-				}
-				return bb, ret, OK(false)
+	return func(d deserializer) (deserializer, []byte, *BoolResult) {
+		var buf []byte
+		for {
+			d2, b, br := read(d)
+			if br.OK && predicate(b) {
+				buf = append(buf, b)
+				d = d2
+			} else {
+				return d, buf, OK(len(buf) > 0)
 			}
 		}
-		return nil, bb, OK(true)
 	}
 }
 
@@ -366,24 +415,25 @@ func boolParser() parserC[Value] {
 }
 
 func byteParser(b byte) parser[byte, *BoolResult] {
-	return func(bb []byte) ([]byte, byte, *BoolResult) {
-		if len(bb) > 0 && bb[0] == b {
-			return bb[1:], b, OK(true)
+	return func(d deserializer) (deserializer, byte, *BoolResult) {
+		if d2, bb, br := read(d); br.OK && bb == b {
+			return d2, b, OK(true)
 		}
-		return bb, 0, OK(false)
+		return d, 0, OK(false)
 	}
 }
 
-func errBoolResult(ii []byte, br *BoolResult) *CombineResult {
+func errBoolResult(d deserializer, br *BoolResult) *CombineResult {
 	if br.OK {
 		return COK(true)
 	}
-	return CErr(errNoMatch(ii))
+	return CErr(errNoMatch(d))
 }
 
-func errNoMatch(ii []byte) error {
-	if len(ii) == 0 {
+func errNoMatch(d deserializer) error {
+	_, b, br := read(d)
+	if !br.OK {
 		return ErrUnexpectedEndOfInput
 	}
-	return InvalidTokenError{Token: ii[0]}
+	return InvalidTokenError{Token: b, Row: d.row, Col: d.col}
 }

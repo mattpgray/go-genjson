@@ -138,10 +138,11 @@ func TestDeserialize(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.input), func(t *testing.T) {
-			_, err := Deserialize(tt.input)
+			v, err := Deserialize(tt.input)
 			if tt.wantErr != (err != nil) {
 				t.Errorf("unexpected error %v", err)
 			}
+			t.Logf("%#v", v)
 		})
 	}
 }
