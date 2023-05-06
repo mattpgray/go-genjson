@@ -16,9 +16,13 @@ func (b Bool) append(s *Serializer, level int, bb []byte) []byte {
 
 func (n Number) append(s *Serializer, level int, bb []byte) []byte {
 	if n.IsFloat {
-		return append(bb, strconv.FormatFloat(n.Float, 'f', 0, 64)...)
+		s := strconv.FormatFloat(n.Float, 'f', -1, 64)
+		if !strings.Contains(s, ".") {
+			s += ".0"
+		}
+		return append(bb, s...)
 	}
-	return append(bb, strconv.FormatInt(n.Integer, 10)...)
+	return append(bb, strconv.FormatUint(n.Integer, 10)...)
 }
 
 func (s String) append(_ *Serializer, level int, bb []byte) []byte {
@@ -91,7 +95,7 @@ type Serializer struct {
 var defSerializer Serializer
 
 func (s *Serializer) Serialize(v Value) []byte {
-	buf := make([]byte, 1024)
+	buf := make([]byte, 0, 1024)
 	buf = append(buf, strings.Repeat(" ", s.Prefix)...)
 	buf = v.append(s, 0, buf)
 	buf = buf[:len(buf):len(buf)]

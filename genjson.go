@@ -6,8 +6,38 @@ package genjson
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 )
+
+type Type int8
+
+const (
+	TypeNull   Type = iota
+	TypeBool   Type = iota
+	TypeNumber Type = iota
+	TypeString Type = iota
+	TypeArray  Type = iota
+	TypeObject Type = iota
+)
+
+func (t Type) String() string {
+	switch t {
+	case TypeNull:
+		return "null"
+	case TypeBool:
+		return "bool"
+	case TypeNumber:
+		return "number"
+	case TypeString:
+		return "string"
+	case TypeArray:
+		return "array"
+	case TypeObject:
+		return "object"
+	}
+	return ""
+}
 
 type (
 	// Value describes a json value. It is only implemented by types in this package. Picture it
@@ -15,19 +45,29 @@ type (
 	Value interface {
 		isValue()
 		append(*Serializer, int, []byte) []byte
+		unmarshal(s *UnmarshalState, v reflect.Value) error
 	}
 
 	Null   struct{}
 	Bool   bool
 	Number struct {
 		Float   float64
-		Integer int64
+		Integer uint64
 		IsFloat bool
+		IsNeg   bool
 	}
 	String string
 	Array  []Value
 	Object map[string]Value
 )
+
+func integer(i uint64) Number {
+	return Number{Integer: i}
+}
+
+func float(i float64) Number {
+	return Number{Float: i, IsFloat: true}
+}
 
 func (Null) isValue()   {}
 func (Bool) isValue()   {}

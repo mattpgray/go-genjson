@@ -2,6 +2,7 @@ package genjson
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"unicode"
 
@@ -21,14 +22,18 @@ type InvalidTokenError struct {
 }
 
 func (ie InvalidTokenError) Error() string {
-	return "invalid token '" + string(ie.Token) + "'"
-}
-
-type JSON struct {
-	value Value
+	return fmt.Sprintf("%d:%d: invalid token '%x'", ie.Row, ie.Col, string(ie.Token))
 }
 
 func Deserialize(b []byte) (Value, error) {
+	d, err := deserialize(b)
+	if err != nil {
+		return nil, err
+	}
+	return d.value, nil
+}
+
+func deserialize(b []byte) (output, error) {
 	d := deserializer{
 		b:   b,
 		idx: 0,
@@ -37,10 +42,10 @@ func Deserialize(b []byte) (Value, error) {
 	}
 	_, v, er := jsonParserE()(d)
 	if er.Err != nil {
-		return nil, er.Err
+		return output{}, er.Err
 	}
 
-	return v.value, nil
+	return v, nil
 }
 
 type deserializer struct {
@@ -71,15 +76,15 @@ func read(d deserializer) (deserializer, byte, *BoolResult) {
 	return d, 0, OK(false)
 }
 
-type loc struct {
-	row int
-	col int
+type Loc struct {
+	Row int
+	Col int
 }
 
 type nodeKeyValue struct {
 	key      string
-	keyStart loc
-	keyEnd   loc
+	keyStart Loc
+	keyEnd   Loc
 	node
 }
 
@@ -88,8 +93,8 @@ type nodeKeyValue struct {
 type node struct {
 	objectNodes []nodeKeyValue
 	arrayNodes  []node
-	start       loc
-	end         loc
+	start       Loc
+	end         Loc
 }
 
 type (
@@ -106,16 +111,16 @@ type output struct {
 }
 
 type locV[V any] struct {
-	start loc
-	end   loc
+	start Loc
+	end   Loc
 	v     V
 }
 
 func locParser[O Output, R Result](p parser[O, R]) parser[locV[O], R] {
 	return func(d deserializer) (deserializer, locV[O], R) {
-		start := loc{row: d.row, col: d.col}
+		start := Loc{Row: d.row, Col: d.col}
 		d, o, r := p(d)
-		end := loc{row: d.row, col: d.col}
+		end := Loc{Row: d.row, Col: d.col}
 		return d, locV[O]{v: o, start: start, end: end}, r
 	}
 }
@@ -208,7 +213,7 @@ func numberParser() parserC[output] {
 	return outputParser(
 		Try(
 			MapO(floatParser(), func(i float64) Value { return Number{Float: i, IsFloat: true} }),
-			MapO(intParser(), func(i int64) Value { return Number{Integer: i} }),
+			MapO(intParser(), func(i uint64) Value { return Number{Integer: i} }),
 		),
 	)
 }
@@ -472,11 +477,11 @@ func floatParser() parserC[float64] {
 	)
 }
 
-func intParser() parserC[int64] {
+func intParser() parserC[uint64] {
 	return Validate(
 		ToC(digitsParser()),
-		func(bb []byte) (int64, *CombineResult) {
-			i, err := strconv.ParseInt(string(bb), 10, 64)
+		func(bb []byte) (uint64, *CombineResult) {
+			i, err := strconv.ParseUint(string(bb), 10, 64)
 			if err != nil {
 				return 0, CErr(err)
 			}
