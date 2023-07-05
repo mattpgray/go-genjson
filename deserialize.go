@@ -22,7 +22,7 @@ type InvalidTokenError struct {
 }
 
 func (ie InvalidTokenError) Error() string {
-	return fmt.Sprintf("%d:%d: invalid token '%x'", ie.Row, ie.Col, string(ie.Token))
+	return fmt.Sprintf("%d:%d: invalid token '%s'", ie.Row, ie.Col, string(ie.Token))
 }
 
 func Deserialize(b []byte) (Value, error) {
