@@ -35,14 +35,16 @@ func appendString(bb []byte, s string) []byte {
 
 func (a Array) append(s *Serializer, level int, bb []byte) []byte {
 	bb = append(bb, "["...)
+	if len(a) > 0 {
+		bb = appendIndent(s, level+1, bb)
+	}
 	for i, v := range a {
 		if i > 0 {
 			bb = append(bb, ","...)
 		}
-		bb = appendIndent(s, level+1, bb)
 		bb = v.append(s, level+1, bb)
+		bb = appendIndent(s, level, bb)
 	}
-	bb = appendIndent(s, level, bb)
 	return append(bb, "]"...)
 }
 
@@ -72,7 +74,9 @@ func (o Object) append(s *Serializer, level int, bb []byte) []byte {
 		bb = v.append(s, level+1, bb)
 	}
 
-	bb = appendIndent(s, level, bb)
+	if len(keys) > 0 {
+		bb = appendIndent(s, level, bb)
+	}
 	return append(bb, "}"...)
 }
 
