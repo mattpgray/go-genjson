@@ -211,10 +211,31 @@ func boolParser() parserC[output] {
 
 func numberParser() parserC[output] {
 	return outputParser(
-		Try(
-			MapO(floatParser(), func(i float64) Value { return Number{Float: i, IsFloat: true} }),
-			MapO(intParser(), func(i uint64) Value { return Number{Integer: i} }),
+		MapO(
+			Try(
+				MapO(
+					surroundParser[Number](
+						Discard(byteParser('-')),
+					)(
+						positiveNumberParser(),
+					)(),
+					func(n Number) Number {
+						n.IsNeg = true
+						return n
+					},
+				),
+				positiveNumberParser(),
+			),
+			func(n Number) Value {
+				return n
+			},
 		),
+	)
+}
+func positiveNumberParser() parser[Number, *CombineResult] {
+	return Try(
+		MapO(floatParser(), func(i float64) Number { return Number{Float: i, IsFloat: true} }),
+		MapO(intParser(), func(i uint64) Number { return Number{Integer: i} }),
 	)
 }
 

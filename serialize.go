@@ -15,6 +15,9 @@ func (b Bool) append(s *Serializer, level int, bb []byte) []byte {
 }
 
 func (n Number) append(s *Serializer, level int, bb []byte) []byte {
+	if n.IsNeg {
+		bb = append(bb, '-')
+	}
 	if n.IsFloat {
 		s := strconv.FormatFloat(n.Float, 'f', -1, 64)
 		if !strings.Contains(s, ".") {
