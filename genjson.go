@@ -48,16 +48,22 @@ type (
 		unmarshal(s *UnmarshalState, v reflect.Value) error
 	}
 
-	Null   struct{}
-	Bool   bool
+	// Null represents a null json value.
+	Null struct{}
+	// Bool represents a boolean json value.
+	Bool bool
+	// Number represents a numeric json value
 	Number struct {
 		Float   float64
 		Integer uint64
 		IsFloat bool
 		IsNeg   bool
 	}
+	// String represents a string json value.
 	String string
-	Array  []Value
+	// Array represents an array json value.
+	Array []Value
+	// Object represents an object json value.
 	Object map[string]Value
 )
 
