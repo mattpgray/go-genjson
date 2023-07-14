@@ -128,7 +128,7 @@ func TestDeserialize(t *testing.T) {
 		{
 			input:   []byte(`{ "key": "value", "key": "value2"}`),
 			want:    nil,
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			input:   []byte(`{ "key" : "value" , "key2" : { "key" : "value" } }`),

@@ -12,7 +12,6 @@ import (
 var (
 	ErrUnmatchedQuote       = errors.New("unmatched quote")
 	ErrUnexpectedEndOfInput = errors.New("unexpected end of input")
-	ErrDuplicateKey         = errors.New("duplicate key in json input")
 )
 
 type InvalidTokenError struct {
@@ -323,21 +322,18 @@ func objectParser() parserC[output] {
 			),
 		),
 		func(kvs locV[[]keyValue]) (output, *CombineResult) {
-			m := map[string]Value{}
+			var o Object
 			nodes := []nodeKeyValue{}
 			for _, kv := range kvs.v {
-				if _, ok := m[kv.key.v]; ok {
-					return output{}, CErr(ErrDuplicateKey)
-				}
 				nodes = append(nodes, nodeKeyValue{
 					node:     kv.value.node,
 					keyStart: kv.key.start,
 					keyEnd:   kv.key.end,
 				})
-				m[kv.key.v] = kv.value.value
+				o.Add(kv.key.v, kv.value.value)
 			}
 			return output{
-				value: Object(m),
+				value: o,
 				node: node{
 					start:       kvs.start,
 					end:         kvs.end,

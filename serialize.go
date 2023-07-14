@@ -53,27 +53,34 @@ func (a Array) append(s *Serializer, level int, bb []byte) []byte {
 
 func (o Object) append(s *Serializer, level int, bb []byte) []byte {
 	bb = append(bb, "{"...)
-	keys := make([]string, 0, len(o))
-	for k := range o {
-		keys = append(keys, k)
+	type keyValue struct {
+		key   string
+		value Value
+	}
+	keys := make([]keyValue, 0, o.Len())
+	iter := o.Iter()
+	for k, v, ok := iter.Next(); ok; k, v, ok = iter.Next() {
+		keys = append(keys, keyValue{
+			key:   k,
+			value: v,
+		})
 	}
 	if s.SortKeys {
-		sort.Strings(keys)
+		sort.Slice(keys, func(i, j int) bool {
+			return keys[i].key < keys[j].key
+		})
 	}
 	for i, k := range keys {
-		v := o[k]
 		if i > 0 {
 			bb = append(bb, ","...)
 		}
 
 		i++
 		bb = appendIndent(s, level+1, bb)
-		bb = appendString(bb, k)
+		bb = appendString(bb, k.key)
 		bb = append(bb, ":"...)
-		if s.KeyValueGap {
-			bb = append(bb, " "...)
-		}
-		bb = v.append(s, level+1, bb)
+		bb = append(bb, strings.Repeat(" ", s.KeyValueGap)...)
+		bb = k.value.append(s, level+1, bb)
 	}
 	if len(keys) > 0 {
 		bb = appendIndent(s, level, bb)
@@ -93,7 +100,7 @@ func appendIndent(s *Serializer, level int, bb []byte) []byte {
 type Serializer struct {
 	Indent      int
 	Prefix      int
-	KeyValueGap bool
+	KeyValueGap int
 	SortKeys    bool
 }
 
