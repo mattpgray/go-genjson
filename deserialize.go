@@ -24,6 +24,16 @@ func (ie InvalidTokenError) Error() string {
 	return fmt.Sprintf("%d:%d: invalid token '%s'", ie.Row, ie.Col, string(ie.Token))
 }
 
+type InvalidEscapeSequence struct {
+	Seq []byte
+	Row int
+	Col int
+}
+
+func (ie InvalidEscapeSequence) Error() string {
+	return fmt.Sprintf("%d:%d: invalid escape sequence '%s'", ie.Row, ie.Col, ie.Seq)
+}
+
 func Deserialize(b []byte) (Value, error) {
 	d, err := deserialize(b)
 	if err != nil {
@@ -451,11 +461,21 @@ func rawStringParser() parser[string, *CombineResult] {
 					if !br.OK {
 						return d, nil, CErr(ErrUnmatchedQuote)
 					}
-					buf = append(buf, b)
 					if inEscape {
 						inEscape = false
+						switch b {
+						case '/', '"', '\\':
+							buf = append(buf, b)
+						default:
+							return d, nil, CErr(InvalidEscapeSequence{
+								Seq: []byte{'\\', b},
+								Row: d.row,
+								Col: d.col,
+							})
+						}
 						continue
 					}
+					buf = append(buf, b)
 					switch b {
 					case '\\':
 						inEscape = true
@@ -466,11 +486,7 @@ func rawStringParser() parser[string, *CombineResult] {
 			},
 		),
 		func(b []byte) (string, *CombineResult) {
-			s, err := strconv.Unquote(string(b))
-			if err != nil {
-				return "", CErr(err)
-			}
-			return s, COK(true)
+			return string(b[1 : len(b)-1]), COK(true)
 		},
 	)
 }
